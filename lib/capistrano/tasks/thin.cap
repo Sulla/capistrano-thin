@@ -1,13 +1,49 @@
 namespace :thin do
-  commands = [:start, :stop, :restart]
+  config_file = fetch(:thin_config_path, "config/thin/#{fetch(:stage)}.yml")
 
-  commands.each do |command|
-    desc "thin #{command}"
-    task command do
-      on roles(fetch(:thin_roles, :app)), in: :sequence, wait: 5 do
+  def exec_thin(command)
+    execute :bundle, "exec thin #{command} -C #{config_file}"
+  end
+
+  task :start do
+    on roles(fetch(:thin_roles, :app)), in: :sequence, wait: 5 do
+      if test "[ -f #{fetch(:thin_pid)} ]" and test :kill, "-0 $( cat #{fetch(:thin_pid)} )"
+        info 'Already Thin is running'
+      else
         within current_path do
-          config_file = fetch(:thin_config_path, "config/thin/#{fetch(:stage)}.yml")
-          execute :bundle, "exec thin #{command} -C #{config_file}"
+          exec_thin(:start)
+        end
+      end
+    end
+  end
+
+  task :stop do
+    on roles(fetch(:thin_roles, :app)), in: :sequence, wait: 5 do
+      within current_path do
+        if test "[ -f #{fetch(:thin_pid)} ]"
+          if test :kill, "-0 $( cat #{fetch(:thin_pid)} )"
+            exec_thin(:stop)
+          else
+            # delete invalid pid file , process is not running.
+            execute :rm, fetch(:thin_pid)
+          end
+        else
+          # pid file not found, so thin is probably not running or it using another pidfile
+          warn 'Thin not running'
+        end
+      end
+    end
+  end
+
+  task :restart do
+    on roles(fetch(:thin_roles, :app)), in: :sequence, wait: 5 do
+      within current_path do
+        if test "[ -f #{fetch(:thin_pid)} ]" and test :kill, "-0 $( cat #{fetch(:thin_pid)} )"
+          # NOTE pid exist but state file is nonsense, so ignore that case
+          exec_thin(:restart)
+        else
+          # Thin is not running or state file is not present : Run it
+          invoke 'thin:start'
         end
       end
     end
